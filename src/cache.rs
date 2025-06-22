@@ -109,29 +109,17 @@ pub fn num_entries_per_bin() -> Vec<usize> {
 /// destroy the strings, they remain valid, meaning it's safe to iterate over
 /// them, the list just might not be completely up to date.
 pub fn string_cache_iter() -> StringCacheIterator {
-    let mut allocs = Vec::new();
+    let mut all_strings = Vec::new();
+
     for m in STRING_CACHE.0.iter() {
         let sc = m.lock();
-        // the start of the allocator's data is actually the ptr, start() just
-        // points to the beginning of the allocated region. The first bytes will
-        // be uninitialized since we're bumping down
-        for a in &sc.old_allocs {
-            allocs.push((a.ptr(), a.end()));
-        }
-        let ptr = sc.alloc.ptr();
-        let end = sc.alloc.end();
-        if ptr != end {
-            allocs.push((sc.alloc.ptr(), sc.alloc.end()));
-        }
+        // Collect all strings from this cache shard
+        all_strings.extend_from_slice(&sc.all_strings);
     }
 
-    let current_ptr =
-        allocs.first().map(|s| s.0).unwrap_or_else(std::ptr::null);
-
     StringCacheIterator {
-        allocs,
-        current_alloc: 0,
-        current_ptr,
+        strings: all_strings,
+        current: 0,
     }
 }
 

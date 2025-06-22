@@ -27,7 +27,7 @@
 //! ```
 //! use ustr::{Ustr, ustr, ustr as u};
 //!
-//! # unsafe { crate::_clear_cache() };
+//! # unsafe { ustr::_clear_cache() };
 //! // Creation is quick and easy using either `Ustr::from` or the ustr function
 //! // and only one copy of any string is stored.
 //! let u1 = Ustr::from("the quick brown fox");
@@ -179,9 +179,7 @@ use std::{
 };
 
 mod bumpalloc;
-#[cfg(feature = "cache_access")]
 pub mod cache;
-#[cfg(feature = "cache_access")]
 pub use cache::*;
 mod hash;
 pub use hash::*;
@@ -233,7 +231,7 @@ impl Ustr {
     ///
     /// ```
     /// use ustr::{Ustr, ustr as u};
-    /// # unsafe { crate::_clear_cache() };
+    /// # unsafe { ustr::_clear_cache() };
     ///
     /// let u1 = Ustr::from("the quick brown fox");
     /// let u2 = u("the quick brown fox");
@@ -273,7 +271,7 @@ impl Ustr {
     ///
     /// ```
     /// use ustr::ustr as u;
-    /// # unsafe { crate::_clear_cache() };
+    /// # unsafe { ustr::_clear_cache() };
     ///
     /// let u_fox = u("the quick brown fox");
     /// let words: Vec<&str> = u_fox.as_str().split_whitespace().collect();
@@ -281,11 +279,12 @@ impl Ustr {
     /// ```
     pub fn as_str(&self) -> &'static str {
         // This is safe if:
-        // 1) self.char_ptr points to a valid address
-        // 2) len is a usize stored usize aligned usize bytes before char_ptr
+        // 1) `self.char_ptr` points to a valid address
+        // 2) `len` is a `usize` stored `usize` aligned `usize` bytes before
+        //    `char_ptr`.
         // 3) char_ptr points to a valid UTF-8 string of len bytes.
-        // All these are guaranteed by StringCache::insert() and by the fact
-        // we can only construct a Ustr from a valid &str.
+        // All these are guaranteed by `StringCache::insert()` and by the fact
+        // we can only construct a `Ustr` from a valid `&str`.
         unsafe {
             str::from_utf8_unchecked(slice::from_raw_parts(
                 self.char_ptr.as_ptr(),
@@ -302,7 +301,7 @@ impl Ustr {
     ///
     /// ```
     /// use ustr::ustr as u;
-    /// # unsafe { crate::_clear_cache() };
+    /// # unsafe { ustr::_clear_cache() };
     ///
     /// let u_fox = u("the quick brown fox");
     /// let len = unsafe {
@@ -458,25 +457,25 @@ impl PartialEq<Ustr> for &Box<str> {
 
 impl PartialEq<Cow<'_, str>> for Ustr {
     fn eq(&self, other: &Cow<'_, str>) -> bool {
-        self.as_str() == &*other
+        self.as_str() == other
     }
 }
 
 impl PartialEq<Ustr> for Cow<'_, str> {
     fn eq(&self, u: &Ustr) -> bool {
-        &*self == u.as_str()
+        self == u.as_str()
     }
 }
 
 impl PartialEq<&Cow<'_, str>> for Ustr {
     fn eq(&self, other: &&Cow<'_, str>) -> bool {
-        self.as_str() == &**other
+        self.as_str() == **other
     }
 }
 
 impl PartialEq<Ustr> for &Cow<'_, str> {
     fn eq(&self, u: &Ustr) -> bool {
-        &**self == u.as_str()
+        **self == u.as_str()
     }
 }
 
@@ -574,31 +573,31 @@ impl From<String> for Ustr {
 
 impl From<&String> for Ustr {
     fn from(s: &String) -> Ustr {
-        Ustr::from(&**s)
+        Ustr::from(s)
     }
 }
 
 impl From<Box<str>> for Ustr {
     fn from(s: Box<str>) -> Ustr {
-        Ustr::from(&*s)
+        Ustr::from(&s)
     }
 }
 
 impl From<Rc<str>> for Ustr {
     fn from(s: Rc<str>) -> Ustr {
-        Ustr::from(&*s)
+        Ustr::from(&s)
     }
 }
 
 impl From<Arc<str>> for Ustr {
     fn from(s: Arc<str>) -> Ustr {
-        Ustr::from(&*s)
+        Ustr::from(&s)
     }
 }
 
 impl From<Cow<'_, str>> for Ustr {
     fn from(s: Cow<'_, str>) -> Ustr {
-        Ustr::from(&*s)
+        Ustr::from(&s)
     }
 }
 
@@ -641,7 +640,7 @@ impl Hash for Ustr {
 ///
 /// ```
 /// use ustr::ustr;
-/// # unsafe { crate::_clear_cache() };
+/// # unsafe { ustr::_clear_cache() };
 ///
 /// let u1 = ustr("the quick brown fox");
 /// let u2 = ustr("the quick brown fox");
@@ -660,7 +659,7 @@ pub fn ustr(s: &str) -> Ustr {
 ///
 /// ```
 /// use ustr::{ustr, existing_ustr};
-/// # unsafe { crate::_clear_cache() };
+/// # unsafe { ustr::_clear_cache() };
 ///
 /// let u1 = existing_ustr("the quick brown fox");
 /// let u2 = ustr("the quick brown fox");
@@ -975,6 +974,40 @@ mod tests {
     }
 
     #[test]
+    fn test_simple_iterator() {
+        let _t = TEST_LOCK.lock();
+        use super::{string_cache_iter, ustr as u};
+        use std::collections::HashSet;
+
+        unsafe { super::_clear_cache() };
+
+        // Create a few strings
+        let s1 = u("hello");
+        let s2 = u("world");
+        let s3 = u("test");
+
+        println!("Created: {:?}, {:?}, {:?}", s1, s2, s3);
+
+        // Collect from iterator
+        let found: Vec<_> = string_cache_iter().collect();
+        println!("Found via iterator: {:?}", found);
+
+        // Check that we find the right number
+        assert_eq!(super::num_entries(), 3);
+        assert_eq!(found.len(), 3);
+
+        // Check that we find the right strings
+        let mut found_set = HashSet::new();
+        for s in found {
+            found_set.insert(s);
+        }
+
+        assert!(found_set.contains("hello"));
+        assert!(found_set.contains("world"));
+        assert!(found_set.contains("test"));
+    }
+
+    #[test]
     fn as_refs() {
         let _t = TEST_LOCK.lock();
 
@@ -1028,7 +1061,8 @@ lazy_static::lazy_static! {
 
         // Everything is initialized. Transmute the array to the
         // initialized type.
-        unsafe { mem::transmute::<_, Bins>(bins) }
+        #[allow(clippy::missing_transmute_annotations)]
+        Bins(unsafe { mem::transmute::<_, [Mutex<StringCache>; NUM_BINS]>(bins) })
     };
 }
 

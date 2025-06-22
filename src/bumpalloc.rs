@@ -1,79 +1,77 @@
-use std::alloc::{GlobalAlloc, Layout, System};
+use bumpalo::Bump;
 
-// The world's dumbest allocator. Just keep bumping a pointer until we run out
-// of memory, in which case we abort. StringCache is responsible for creating
-// a new allocator when that's about to happen.
-// This is now bumping downward rather than up, which simplifies the allocate()
-// method and gives a small (5-7%) performance improvement in multithreaded
-// benchmarks
-// See https://fitzgeraldnick.com/2019/11/01/always-bump-downwards.html
+// Wrapper around bumpalo::Bump to provide the same interface as the original
+// LeakyBumpAlloc
 pub(crate) struct LeakyBumpAlloc {
-    layout: Layout,
-    start: *mut u8,
-    end: *mut u8,
-    ptr: *mut u8,
+    bump: Bump,
+    capacity: usize,
+    allocated: usize,
 }
 
 impl LeakyBumpAlloc {
-    pub fn new(capacity: usize, alignment: usize) -> LeakyBumpAlloc {
-        let layout = Layout::from_size_align(capacity, alignment).unwrap();
-        let start = unsafe { System.alloc(layout) };
-        if start.is_null() {
-            panic!("oom");
-        }
-        let end = unsafe { start.add(layout.size()) };
-        let ptr = end;
+    pub fn new(capacity: usize, _alignment: usize) -> LeakyBumpAlloc {
+        // Create bump allocator. We don't limit bumpalo's capacity since it
+        // grows automatically, but we track our logical capacity for
+        // compatibility with StringCache logic
+        let bump = Bump::new();
+
         LeakyBumpAlloc {
-            layout,
-            start,
-            end,
-            ptr,
+            bump,
+            capacity,
+            allocated: 0,
         }
     }
 
     #[doc(hidden)]
     // used for resetting the cache between benchmark runs. DO NOT CALL THIS.
     pub unsafe fn clear(&mut self) {
-        System.dealloc(self.start, self.layout);
+        // Reset the bump allocator by replacing it with a new one
+        self.bump = Bump::new();
+
+        // Reset tracking
+        self.allocated = 0;
     }
 
     // Allocates a new chunk. Aborts if out of memory.
     pub unsafe fn allocate(&mut self, num_bytes: usize) -> *mut u8 {
-        // Our new ptr will be offset down the heap by num_bytes bytes.
-        let ptr = self.ptr as usize;
-        let new_ptr = ptr.checked_sub(num_bytes).expect("ptr sub overflowed");
-        // Round down to alignment.
-        let new_ptr = new_ptr & !(self.layout.align() - 1);
-        // Check we have enough capacity.
-        let start = self.start as usize;
-        if new_ptr < start {
-            eprintln!(
-                "Allocator asked to bump to {} bytes with a capacity of {}",
-                self.end as usize - new_ptr,
-                self.capacity()
-            );
-            // We have to abort here rather than panic or the mutex may
-            // deadlock.
-            std::process::abort();
-        }
+        // Use bumpalo's allocation with proper alignment for StringCacheEntry
+        let layout = std::alloc::Layout::from_size_align(
+            num_bytes,
+            std::mem::align_of::<crate::StringCacheEntry>(),
+        )
+        .unwrap();
 
-        self.ptr = self.ptr.sub(ptr - new_ptr);
-        self.ptr
+        // Try to allocate. bumpalo will handle growing automatically
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.bump.alloc_layout(layout)
+            }));
+
+        match result {
+            Ok(ptr) => {
+                let result = ptr.as_ptr();
+
+                // Update our tracking
+                self.allocated += num_bytes;
+                result
+            }
+            Err(_) => {
+                eprintln!("Allocator failed to allocate {num_bytes} bytes");
+                // We have to abort here rather than panic or the mutex may
+                // deadlock.
+                std::process::abort();
+            }
+        }
     }
 
     pub fn allocated(&self) -> usize {
-        self.end as usize - self.ptr as usize
+        // Return our manual tracking rather than bumpalo's since we want to
+        // preserve the original behavior for StringCache capacity
+        // checks
+        self.allocated
     }
 
     pub fn capacity(&self) -> usize {
-        self.layout.size()
-    }
-
-    pub(crate) fn end(&self) -> *const u8 {
-        self.end
-    }
-
-    pub(crate) fn ptr(&self) -> *const u8 {
-        self.ptr
+        self.capacity
     }
 }
