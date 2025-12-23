@@ -28,7 +28,7 @@ facet = ["dep:facet"]
 ahash = { version = "0.8", default-features = false }
 byteorder = "1.5"
 document-features = "0.2"
-facet = { version = "0.32", optional = true }
+facet = { version = "0.33", optional = true }
 lazy_static = "1.5"
 parking_lot = "0.12"
 serde = { version = "1", optional = true }
