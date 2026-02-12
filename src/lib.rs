@@ -87,6 +87,28 @@
 //! # }
 //! ```
 //!
+//! By enabling the `"rkyv"` feature you can use zero-copy deserialization with
+//! rkyv.
+//!
+//! ```
+//! # #[cfg(feature = "rkyv")] {
+//! use ustr::{Ustr, ustr};
+//!
+//! let u_hello = ustr("hello world");
+//!
+//! // Serialize to bytes
+//! let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&u_hello).unwrap();
+//!
+//! // Access the archived string (zero-copy)
+//! let archived = unsafe { rkyv::access_unchecked::<rkyv::string::ArchivedString>(&bytes) };
+//! assert_eq!(archived.as_str(), "hello world");
+//!
+//! // Deserialize back to Ustr (interns the string again)
+//! let deserialized: Ustr = rkyv::deserialize::<Ustr, rkyv::rancor::Error>(archived).unwrap();
+//! assert_eq!(u_hello, deserialized);
+//! # }
+//! ```
+//!
 //! ## Why?
 //!
 //! It is common in certain types of applications to use strings as identifiers,
@@ -216,6 +238,14 @@ pub mod serialization;
 pub use facet::Facet;
 #[cfg(feature = "serde")]
 pub use serialization::DeserializedCache;
+
+#[cfg(feature = "rkyv")]
+use rkyv::{
+    Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize,
+    rancor::{Fallible, Source},
+    ser::{Allocator, Writer},
+    string::{ArchivedString, StringResolver},
+};
 
 /// A handle representing a string in the global string cache.
 ///
@@ -656,6 +686,44 @@ impl Hash for Ustr {
     }
 }
 
+#[cfg(feature = "rkyv")]
+impl Archive for Ustr {
+    type Archived = ArchivedString;
+    type Resolver = StringResolver;
+
+    fn resolve(
+        &self,
+        resolver: Self::Resolver,
+        out: rkyv::Place<Self::Archived>,
+    ) {
+        ArchivedString::resolve_from_str(self.as_str(), resolver, out);
+    }
+}
+
+#[cfg(feature = "rkyv")]
+impl<S> RkyvSerialize<S> for Ustr
+where
+    S: Fallible + Allocator + Writer + ?Sized,
+    S::Error: Source,
+{
+    fn serialize(
+        &self,
+        serializer: &mut S,
+    ) -> Result<Self::Resolver, <S as Fallible>::Error> {
+        ArchivedString::serialize_from_str(self.as_str(), serializer)
+    }
+}
+
+#[cfg(feature = "rkyv")]
+impl<D: Fallible + ?Sized> RkyvDeserialize<Ustr, D> for ArchivedString {
+    fn deserialize(
+        &self,
+        _deserializer: &mut D,
+    ) -> Result<Ustr, <D as Fallible>::Error> {
+        Ok(Ustr::from(self.as_str()))
+    }
+}
+
 /// Create a new `Ustr` from the given `str`.
 ///
 /// # Examples
@@ -995,6 +1063,59 @@ mod tests {
         let me_hello: Ustr = serde_json::from_str(&json).unwrap();
 
         assert_eq!(u_hello, me_hello);
+    }
+
+    #[cfg(all(feature = "rkyv", not(miri)))]
+    #[test]
+    fn rkyv_ustr() {
+        let _t = TEST_LOCK.lock();
+
+        use super::{Ustr, ustr};
+
+        // Clear cache to ensure clean state
+        unsafe { super::_clear_cache() };
+
+        let u_hello = ustr("hello world");
+        let u_test = ustr("test string");
+
+        // Serialize using rkyv
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&u_hello).unwrap();
+
+        // Deserialize using rkyv - access the archived string
+        let archived = unsafe {
+            rkyv::access_unchecked::<rkyv::string::ArchivedString>(&bytes)
+        };
+        let deserialized: Ustr =
+            rkyv::deserialize::<Ustr, rkyv::rancor::Error>(archived).unwrap();
+
+        assert_eq!(u_hello, deserialized);
+        assert_eq!(deserialized.as_str(), "hello world");
+
+        // Test serializing and accessing back the string content
+        assert_eq!(archived.as_str(), "hello world");
+
+        // Test with multiple Ustrs
+        let ustrs = vec![u_hello, u_test];
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&ustrs).unwrap();
+
+        // For vectors, we need to access the archived vec which contains
+        // archived strings
+        let archived_vec = unsafe {
+            rkyv::access_unchecked::<
+                rkyv::vec::ArchivedVec<rkyv::string::ArchivedString>,
+            >(&bytes)
+        };
+
+        // Deserialize each element
+        let mut deserialized_vec = Vec::new();
+        for archived_str in archived_vec.iter() {
+            let u: Ustr =
+                rkyv::deserialize::<Ustr, rkyv::rancor::Error>(archived_str)
+                    .unwrap();
+            deserialized_vec.push(u);
+        }
+
+        assert_eq!(ustrs, deserialized_vec);
     }
 
     #[test]
