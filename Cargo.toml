@@ -30,7 +30,7 @@ rkyv = ["dep:rkyv"]
 ahash = { version = "0.8", default-features = false }
 byteorder = "1.5"
 document-features = "0.2"
-facet = { version = ">=0.34", optional = true }
+facet = { version = ">=0.44", optional = true }
 lazy_static = "1.5"
 parking_lot = "0.12"
 rkyv = { version = "0.8", optional = true }
